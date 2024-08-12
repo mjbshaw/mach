@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mach = @import("../main.zig");
 const Core = @import("../Core.zig");
 const InputState = @import("InputState.zig");
@@ -35,6 +36,30 @@ pub const EventIterator = struct {
 
 pub const Darwin = @This();
 
+comptime {
+    asm (
+        \\    .section __DATA,__objc_imageinfo,regular,no_dead_strip
+        \\L_OBJC_IMAGE_INFO:
+        \\    .long 0
+        \\    .long 64
+    );
+}
+
+const AppDelegate = opaque {
+    pub const InternalInfo = objc.objc.ExternClass("AppDelegate", objc.foundation.Object);
+    pub fn as(self: *AppDelegate, comptime T: type) *T {
+        if (T == objc.app_kit.ApplicationDelegate) return @ptrCast(self);
+        return InternalInfo.as(self, T);
+    }
+
+    pub const allocInit = InternalInfo.allocInit();
+
+    pub const setRunBlock = @extern(
+        *const fn (*AppDelegate, *objc.dispatch.Block) callconv(.C) void,
+        .{ .name = "\x01-[AppDelegate setRunFunction:]" },
+    );
+};
+
 allocator: std.mem.Allocator,
 core: *Core,
 
@@ -53,11 +78,61 @@ refresh_rate: u32,
 size: Size,
 surface_descriptor: gpu.Surface.Descriptor,
 
+const DarwinAndOptions = struct {
+    darwin: *Darwin,
+    options: InitOptions,
+};
+
+fn runBlock(_: *objc.system.BlockLiteral(DarwinAndOptions)) callconv(.C) void {
+    while (true) {
+        const timeout_seconds = 1.0;
+        switch (objc.core_foundation.RunLoop.runInMode(.default, timeout_seconds, false)) {
+            .finished => {
+                std.debug.print("Run loop finished (weird, right?)\n", .{});
+                return;
+            },
+            .stopped => {
+                std.debug.print("Run loop was stopped (weird, right?)\n", .{});
+                return;
+            },
+            .timed_out => {
+                std.debug.print("Nothing to do...\n", .{});
+            },
+            .handled_source => continue,
+            _ => |result| {
+                std.debug.print("CFRunLoopRunInMode returned {}, which is weird and shouldn't happen.\n", .{result});
+                return;
+            },
+        }
+    }
+}
+
+fn initDelegateUiKit(context: ?*anyopaque) callconv(.C) void {
+    const app = objc.ui_kit.Application.sharedApplication();
+    const delegate: *AppDelegate = @ptrCast(app.delegate());
+    delegate.setRunBlock(@ptrCast(context));
+}
+
 // Called on the main thread
-pub fn init(_: *Darwin, _: InitOptions) !void {
-    const app = objc.appkit.ns.Application.sharedApplication();
-    _ = app; // autofix
-    return;
+pub fn init(self: *Darwin, options: InitOptions) !void {
+    const autoreleasepool = objc.objc.autoreleasePoolPush();
+    defer objc.objc.autoreleasePoolPop(autoreleasepool);
+
+    const block = objc.stackBlockLiteral.stackBlockLiteral(runBlock, .{ .darwin = self, .options = options }, null, null);
+
+    if (comptime builtin.os.tag == .macos) {
+        const app = objc.app_kit.Application.sharedApplication();
+        const delegate = AppDelegate.allocInit();
+        delegate.setRunBlock(block.asBlock());
+        app.setDelegate(delegate.asNSApplicationDelegate());
+        app.run();
+    } else {
+        const main_queue = objc.dispatch.Queue.main;
+        main_queue.dispatchAsyncF(block.asBlock(), initDelegateUiKit);
+        const delegate_class_name = objc.foundation.String.literalWithUniqueId("AppDelegate", "0");
+        const argc: c_int = @bitCast(@as(c_uint, @truncate(std.os.argv.len)));
+        _ = objc.ui_kit.applicationMain(argc, @ptrCast(std.os.argv.ptr), null, delegate_class_name);
+    }
 }
 
 pub fn deinit(_: *Darwin) void {

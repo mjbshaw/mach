@@ -294,11 +294,16 @@ fn linkSysgpu(b: *std.Build, module: *std.Build.Module) void {
     if (target.cpu.arch != .wasm32) module.link_libc = true;
     if (target.isDarwin()) {
         module.linkSystemLibrary("objc", .{});
-        module.linkFramework("AppKit", .{});
+        if (target.os.tag == .macos) {
+            module.linkFramework("AppKit", .{});
+        } else {
+            module.linkFramework("UIKit", .{});
+        }
         module.linkFramework("CoreGraphics", .{});
         module.linkFramework("Foundation", .{});
         module.linkFramework("Metal", .{});
         module.linkFramework("QuartzCore", .{});
+        // TODO: add asm files
     }
     if (target.os.tag == .windows) {
         module.linkSystemLibrary("d3d12", .{});
