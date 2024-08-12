@@ -36,30 +36,6 @@ pub const EventIterator = struct {
 
 pub const Darwin = @This();
 
-comptime {
-    asm (
-        \\    .section __DATA,__objc_imageinfo,regular,no_dead_strip
-        \\L_OBJC_IMAGE_INFO:
-        \\    .long 0
-        \\    .long 64
-    );
-}
-
-const AppDelegate = opaque {
-    pub const InternalInfo = objc.objc.ExternClass("AppDelegate", objc.foundation.Object);
-    pub fn as(self: *AppDelegate, comptime T: type) *T {
-        if (T == objc.app_kit.ApplicationDelegate) return @ptrCast(self);
-        return InternalInfo.as(self, T);
-    }
-
-    pub const allocInit = InternalInfo.allocInit();
-
-    pub const setRunBlock = @extern(
-        *const fn (*AppDelegate, *objc.dispatch.Block) callconv(.C) void,
-        .{ .name = "\x01-[AppDelegate setRunFunction:]" },
-    );
-};
-
 allocator: std.mem.Allocator,
 core: *Core,
 
@@ -77,16 +53,37 @@ headless: bool,
 refresh_rate: u32,
 size: Size,
 surface_descriptor: gpu.Surface.Descriptor,
+init_options: InitOptions,
 
-const DarwinAndOptions = struct {
-    darwin: *Darwin,
-    options: InitOptions,
+const AppDelegate = opaque {
+    pub const InternalInfo = objc.objc.ExternClass("AppDelegate", AppDelegate, objc.foundation.Object);
+    pub const retain = InternalInfo.retain;
+    pub const release = InternalInfo.release;
+    pub const autorelease = InternalInfo.autorelease;
+    pub fn as(self: *AppDelegate, comptime T: type) *T {
+        if (T == objc.app_kit.ApplicationDelegate) return @ptrCast(self);
+        return InternalInfo.as(self, T);
+    }
+
+    pub const allocInit = InternalInfo.allocInit;
+
+    pub fn setRunBlock(self: *AppDelegate, block: *objc.dispatch.Block) void {
+        method(self, block);
+    }
+    const method = @extern(
+        *const fn (*AppDelegate, *objc.dispatch.Block) callconv(.C) void,
+        .{ .name = "\x01-[AppDelegate setRunBlock:]" },
+    );
 };
 
-fn runBlock(_: *objc.system.BlockLiteral(DarwinAndOptions)) callconv(.C) void {
+fn runBlock(block: *objc.system.BlockLiteral(*Darwin)) callconv(.C) void {
+    const darwin = block.context;
+    _ = darwin;
+
     while (true) {
         const timeout_seconds = 1.0;
-        switch (objc.core_foundation.RunLoop.runInMode(.default, timeout_seconds, false)) {
+        const mode = objc.core_foundation.RunLoop.Mode.default;
+        switch (objc.core_foundation.RunLoop.runInMode(mode, timeout_seconds, false)) {
             .finished => {
                 std.debug.print("Run loop finished (weird, right?)\n", .{});
                 return;
@@ -107,24 +104,27 @@ fn runBlock(_: *objc.system.BlockLiteral(DarwinAndOptions)) callconv(.C) void {
     }
 }
 
-fn initDelegateUiKit(context: ?*anyopaque) callconv(.C) void {
+fn initDelegateUiKit(block: ?*anyopaque) callconv(.C) void {
     const app = objc.ui_kit.Application.sharedApplication();
     const delegate: *AppDelegate = @ptrCast(app.delegate());
-    delegate.setRunBlock(@ptrCast(context));
+    delegate.setRunBlock(@ptrCast(block));
 }
 
 // Called on the main thread
 pub fn init(self: *Darwin, options: InitOptions) !void {
-    const autoreleasepool = objc.objc.autoreleasePoolPush();
-    defer objc.objc.autoreleasePoolPop(autoreleasepool);
+    self.init_options = options;
 
-    const block = objc.stackBlockLiteral.stackBlockLiteral(runBlock, .{ .darwin = self, .options = options }, null, null);
+    const pool = objc.objc.autoreleasePoolPush();
+    defer objc.objc.autoreleasePoolPop(pool);
+
+    var block = objc.dispatch.stackBlockLiteral(runBlock, self, null, null);
 
     if (comptime builtin.os.tag == .macos) {
         const app = objc.app_kit.Application.sharedApplication();
         const delegate = AppDelegate.allocInit();
+        defer delegate.release();
         delegate.setRunBlock(block.asBlock());
-        app.setDelegate(delegate.asNSApplicationDelegate());
+        app.setDelegate(delegate.as(objc.app_kit.ApplicationDelegate));
         app.run();
     } else {
         const main_queue = objc.dispatch.Queue.main;
@@ -237,4 +237,13 @@ pub fn mouseReleased(_: *Darwin, _: MouseButton) bool {
 // May be called from any thread.
 pub fn mousePosition(_: *Darwin) Position {
     return Position{ .x = 0, .y = 0 };
+}
+
+comptime {
+    asm (
+        \\    .section __DATA,__objc_imageinfo,regular,no_dead_strip
+        \\L_OBJC_IMAGE_INFO:
+        \\    .long 0
+        \\    .long 64
+    );
 }

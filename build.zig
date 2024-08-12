@@ -303,7 +303,19 @@ fn linkSysgpu(b: *std.Build, module: *std.Build.Module) void {
         module.linkFramework("Foundation", .{});
         module.linkFramework("Metal", .{});
         module.linkFramework("QuartzCore", .{});
-        // TODO: add asm files
+        if (target.os.tag == .macos) {
+            if (target.cpu.arch == .x86_64) {
+                module.addAssemblyFile(b.path("src/core/darwin/x86_64-apple-macos12.s"));
+            } else {
+                module.addAssemblyFile(b.path("src/core/darwin/arm64-apple-macos12.s"));
+            }
+        } else {
+            if (target.cpu.arch == .x86_64) {
+                module.addAssemblyFile(b.path("src/core/darwin/x86_64-apple-ios15-sim.s"));
+            } else {
+                module.addAssemblyFile(b.path("src/core/darwin/arm64-apple-ios15.s"));
+            }
+        }
     }
     if (target.os.tag == .windows) {
         module.linkSystemLibrary("d3d12", .{});
