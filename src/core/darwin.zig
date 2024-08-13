@@ -83,7 +83,7 @@ fn runBlock(block: *objc.system.BlockLiteral(*Darwin)) callconv(.C) void {
     std.debug.print("Starting run loop...\n", .{});
     while (true) {
         const timeout_seconds = 1.0;
-        const mode = objc.core_foundation.RunLoop.Mode.default;
+        const mode = objc.core_foundation.RunLoop.Mode.default.*;
         switch (objc.core_foundation.RunLoop.runInMode(mode, timeout_seconds, false)) {
             .finished => {
                 std.debug.print("Run loop finished (weird, right?)\n", .{});
