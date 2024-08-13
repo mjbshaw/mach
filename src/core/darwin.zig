@@ -58,6 +58,7 @@ window: ?*objc.app_kit.Window,
 // Called on the main thread
 pub fn init(darwin: *Darwin, options: InitOptions) !void {
     var surface_descriptor = gpu.Surface.Descriptor{};
+    // TODO: make this compatible with UIKit
     var window: ?*objc.app_kit.Window = null;
     if (!options.headless) {
         const metal_descriptor = try options.allocator.create(gpu.Surface.DescriptorFromMetalLayer);
