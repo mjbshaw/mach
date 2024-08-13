@@ -351,7 +351,7 @@ pub const StreamingManager = struct {
                 return error.NewBufferFailed;
             };
 
-            mtl_buffer.as(mtl.Resource).setLabel(ns.String.literal("upload"));
+            mtl_buffer.as(mtl.Resource).setLabel(ns.String.literalWithUniqueId("upload", "0"));
             try manager.free_buffers.append(allocator, mtl_buffer);
         }
 
@@ -385,7 +385,7 @@ pub const LengthsBuffer = struct {
             mtl_buffer = mtl_device.newBufferWithLength_options(max_buffers_per_stage * @sizeOf(u32), .{}) orelse {
                 return error.NewBufferFailed;
             };
-            mtl_buffer.as(mtl.Resource).setLabel(ns.String.literal("buffer lengths"));
+            mtl_buffer.as(mtl.Resource).setLabel(ns.String.literalWithUniqueId("buffer lengths", "1"));
         }
 
         return .{
