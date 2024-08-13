@@ -40,26 +40,73 @@ allocator: std.mem.Allocator,
 core: *Core,
 
 events: EventQueue,
-input_state: InputState,
-modifiers: KeyMods,
+input_state: InputState = .{},
+// modifiers: KeyMods,
 
-title: [:0]u8,
+title: [:0]const u8,
 display_mode: DisplayMode,
-vsync_mode: VSyncMode,
-cursor_mode: CursorMode,
-cursor_shape: CursorShape,
+vsync_mode: VSyncMode = .none,
+cursor_mode: CursorMode = .normal,
+cursor_shape: CursorShape = .arrow,
 border: bool,
 headless: bool,
 refresh_rate: u32,
 size: Size,
 surface_descriptor: gpu.Surface.Descriptor,
-init_options: InitOptions,
+window: ?*objc.app_kit.Window,
 
 // Called on the main thread
-pub fn init(_: *Darwin, _: InitOptions) !void {
+pub fn init(darwin: *Darwin, options: InitOptions) !void {
+    var surface_descriptor = gpu.Surface.Descriptor{};
+    var window: ?*objc.app_kit.Window = null;
+    if (!options.headless) {
+        const metal_descriptor = try options.allocator.create(gpu.Surface.DescriptorFromMetalLayer);
+        const layer = objc.quartz_core.MetalLayer.allocInit();
+        defer layer.release();
+        metal_descriptor.* = .{
+            .layer = layer,
+        };
+        surface_descriptor.next_in_chain = .{ .from_metal_layer = metal_descriptor };
+
+        const screen = objc.app_kit.Screen.mainScreen();
+        const rect = objc.foundation.Rect{ // TODO: use a meaningful rect
+            .origin = .{ .x = 100, .y = 100 },
+            .size = .{ .width = 540, .height = 960 },
+        };
+        const window_style = objc.app_kit.WindowStyleMask{
+            .full_screen = options.display_mode == .fullscreen,
+            .titled = options.display_mode == .windowed,
+            .closable = options.display_mode == .windowed,
+            .miniaturizable = options.display_mode == .windowed,
+            .resizable = options.display_mode == .windowed,
+        };
+        window = objc.app_kit.Window.alloc().initWithContentRect_styleMask_backing_defer_screen(rect, window_style, .buffered, true, screen);
+        window.?.setReleasedWhenClosed(false);
+        window.?.contentView().setLayer(layer.as(objc.quartz_core.Layer));
+        window.?.setIsVisible(true);
+        window.?.makeKeyAndOrderFront(null);
+    }
+
+    var events = EventQueue.init(options.allocator);
+    try events.ensureTotalCapacity(2048);
+
+    darwin.* = .{
+        .allocator = options.allocator,
+        .core = @fieldParentPtr("platform", darwin),
+        .events = events,
+        .title = options.title,
+        .display_mode = options.display_mode,
+        .border = options.border,
+        .headless = options.headless,
+        .refresh_rate = 60, // TODO: set to something meaningful
+        .size = options.size,
+        .surface_descriptor = surface_descriptor,
+        .window = window,
+    };
 }
 
-pub fn deinit(_: *Darwin) void {
+pub fn deinit(darwin: *Darwin) void {
+    if (darwin.window) |w| w.release();
     return;
 }
 
