@@ -72,32 +72,55 @@ fn mainRunLoopBlock(block: *objc.system.BlockLiteral(*App)) callconv(.C) void {
 
     const app = block.context;
 
-    std.debug.print("Starting run loop...\n", .{});
+    std.debug.print("Starting run loop on thread: {s}\n", .{objc.foundation.Thread.currentThread().as(objc.foundation.ObjectProtocol).description().utf8String()});
     // Main loop
     while (!app.mods.mod.mach_core.state().should_close) {
+        const pool = objc.objc.autoreleasePoolPush();
+        defer objc.objc.autoreleasePoolPop(pool);
+
         // Dispatch events until queue is empty
         app.mods.dispatch(&stack_space, .{}) catch return; // TODO: report the error
         // Run `update` when `init` and all other systems are exectued
         app.mods.schedule(app.main_mod, .update);
 
-        // Drain the `CFRunLoop`
-        while (true) {
-            const mode = objc.core_foundation.RunLoop.Mode.default.*;
-            const status = objc.core_foundation.RunLoop.runInMode(mode, 0.0, false);
-            if (status == .handled_source) {
-                // Keep running the `CFRunLoop` while there is work to be done
-                continue;
-            }
-            if (status == .timed_out) {
-                // `CFRunLoop` has been drained, switch back to running Mach's run loop
-                break;
-            }
+        if (builtin.target.os.tag == .macos) {
+            const ns_app = objc.app_kit.Application.sharedApplication();
 
-            // This is unexpected and shouldn't happen
-            std.debug.print("Run loop unexpectedly returned {} (weird, right?)\n", .{status});
-            app.mods.mod.mach_core.state().should_close = true;
-            break;
+            while (true) {
+                // TODO: use a configurable timeout
+                const event = ns_app.nextEventMatchingMask(
+                    objc.app_kit.EventMask.any,
+                    objc.foundation.Date.distantPast(),
+                    objc.app_kit.RunLoopMode.default.*,
+                    true,
+                );
+                if (event == null) break;
+                std.debug.print("Handling Cocoa event {s}...\n", .{event.?.as(objc.foundation.ObjectProtocol).description().utf8String()});
+                ns_app.sendEvent(event.?);
+                ns_app.updateWindows();
+            }
+        } else {
+            // TODO: run the UIKit loop.
         }
+        // Drain the `CFRunLoop`
+        // while (true) {
+        //     const mode = objc.core_foundation.RunLoop.Mode.event_tracking.*;
+        //     const status = objc.core_foundation.RunLoop.runInMode(mode, 0.0, false);
+        //     if (status == .handled_source) {
+        //         std.debug.print("CFRunLoop handled a source\n", .{});
+        //         // Keep running the `CFRunLoop` while there is work to be done
+        //         continue;
+        //     }
+        //     if (status == .timed_out) {
+        //         std.debug.print("CFRunLoop has no work...\n", .{});
+        //         // `CFRunLoop` has been drained, switch back to running Mach's run loop
+        //         break;
+        //     }
+        //     // This is unexpected and shouldn't happen
+        //     std.debug.print("Run loop unexpectedly returned {} (weird, right?)\n", .{status});
+        //     app.mods.mod.mach_core.state().should_close = true;
+        //     break;
+        // }
     }
 
     // Final Dispatch to deinitalize resources
@@ -148,7 +171,7 @@ pub const App = struct {
             defer delegate.release();
             delegate.setRunBlock(block.asBlock());
             ns_app.setDelegate(delegate.as(objc.app_kit.ApplicationDelegate));
-            ns_app.run();
+            _ = objc.app_kit.applicationMain(0, undefined);
         } else {
             const main_queue = objc.dispatch.Queue.main;
             main_queue.dispatchAsyncF(block.asBlock(), initDelegateUiKit);
