@@ -83,14 +83,26 @@ fn mainRunLoopBlock(block: *objc.system.BlockLiteral(*App)) callconv(.C) void {
         // Run `update` when `init` and all other systems are exectued
         app.mods.schedule(app.main_mod, .update);
 
+        // TODO: an alternative loop model would be to use `dispatch_async()`. The
+        // general idea is:
+        //   1. Create three blocks: `init()`, `update()`, and `deinit()`.
+        //   2. Schedule `init()` when the application starts running.
+        //   3. The `init()` block then schedules `update()`.
+        //   4. `update()` then keeps rescheduling itself every time it runs.
+        //   5. When `should_close` is true, `update()` changes to schedule `deinit()`.
+        //   6. `deinit()` runs and Mach stops.
+        // This kind of looping model would work for both iOS and macOS so we wouldn't
+        // need multiple loops. I don't know if this is a great idea or not but it
+        // might be worth considering.
         if (builtin.target.os.tag == .macos) {
             const ns_app = objc.app_kit.Application.sharedApplication();
 
             while (true) {
-                // TODO: use a configurable timeout
+                // TODO: use a configurable timeout. If we dont and instead plan to always use `distantPast`, just use `null` instead.
+                const timeout = objc.foundation.Date.distantPast();
                 const event = ns_app.nextEventMatchingMask(
                     objc.app_kit.EventMask.any,
-                    objc.foundation.Date.distantPast(),
+                    timeout,
                     objc.app_kit.RunLoopMode.default.*,
                     true,
                 );
@@ -100,27 +112,24 @@ fn mainRunLoopBlock(block: *objc.system.BlockLiteral(*App)) callconv(.C) void {
                 ns_app.updateWindows();
             }
         } else {
-            // TODO: run the UIKit loop.
+            while (true) {
+                const mode = objc.core_foundation.RunLoop.Mode.event_tracking.*;
+                const status = objc.core_foundation.RunLoop.runInMode(mode, 0.0, false);
+                if (status == .handled_source) {
+                    std.debug.print("CFRunLoop handled a source\n", .{});
+                    // Keep running the `CFRunLoop` while there is work to be done
+                    continue;
+                }
+                if (status == .timed_out) {
+                    // `CFRunLoop` has been drained, switch back to running Mach's run loop
+                    break;
+                }
+                // This is unexpected and shouldn't happen
+                std.debug.print("Run loop unexpectedly returned {} (weird, right?)\n", .{status});
+                app.mods.mod.mach_core.state().should_close = true;
+                break;
+            }
         }
-        // Drain the `CFRunLoop`
-        // while (true) {
-        //     const mode = objc.core_foundation.RunLoop.Mode.event_tracking.*;
-        //     const status = objc.core_foundation.RunLoop.runInMode(mode, 0.0, false);
-        //     if (status == .handled_source) {
-        //         std.debug.print("CFRunLoop handled a source\n", .{});
-        //         // Keep running the `CFRunLoop` while there is work to be done
-        //         continue;
-        //     }
-        //     if (status == .timed_out) {
-        //         std.debug.print("CFRunLoop has no work...\n", .{});
-        //         // `CFRunLoop` has been drained, switch back to running Mach's run loop
-        //         break;
-        //     }
-        //     // This is unexpected and shouldn't happen
-        //     std.debug.print("Run loop unexpectedly returned {} (weird, right?)\n", .{status});
-        //     app.mods.mod.mach_core.state().should_close = true;
-        //     break;
-        // }
     }
 
     // Final Dispatch to deinitalize resources
